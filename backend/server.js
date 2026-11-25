@@ -4,9 +4,12 @@
 // Tech Stack: Node.js, Express.js, Socket.io, CORS, dotenv
 // ============================================================
 
+const fs = require("fs");
 const path = require("path");
 const ENV_PATH = path.join(__dirname, ".env");
-require("dotenv").config({ path: ENV_PATH, override: true });
+if (fs.existsSync(ENV_PATH)) {
+  require("dotenv").config({ path: ENV_PATH, override: true });
+}
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -16,18 +19,24 @@ const { Server } = require("socket.io");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",")
+      .map((s) => s.trim().replace(/\/+$/, ""))
+      .filter(Boolean)
+  : "*";
+
 // 2. Middleware setup
-app.use(cors());
+app.use(cors({ origin: allowedOrigins }));
 // Set JSON body limit to 10mb for full canvas snapshot state broadcasts and base64 exports
 app.use(express.json({ limit: "10mb" }));
 
 // 3. Create HTTP server wrapping Express app
 const server = http.createServer(app);
 
-// 4. Initialize Socket.io server with CORS configuration
+// 4. Initialize Socket.io server with CORS configuration (supports both local dev and live frontend URLs)
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // Allow requests from our React frontend
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
   },
   maxHttpBufferSize: 1e7, // 10MB buffer for canvas snapshot payloads on undo/redo & image imports
@@ -61,7 +70,9 @@ const GEMINI_MODELS = [
 ];
 
 function getGeminiApiKey() {
-  require("dotenv").config({ path: ENV_PATH, override: true });
+  if (fs.existsSync(ENV_PATH)) {
+    require("dotenv").config({ path: ENV_PATH, override: true });
+  }
   const key = process.env.GEMINI_API_KEY;
   return key && key.trim() ? key.trim() : null;
 }

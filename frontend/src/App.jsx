@@ -4,8 +4,10 @@ import Canvas from "./components/Canvas";
 import Header from "./components/Header";
 import AiExplainer from "./components/AiExplainer";
 
-// Backend Express & Socket.io server endpoint
-const SERVER_URL = "http://localhost:5000";
+// Backend Express & Socket.io server endpoint (uses VITE_SERVER_URL in production, localhost in dev)
+const SERVER_URL = (
+  import.meta.env.VITE_SERVER_URL || "http://localhost:5000"
+).replace(/\/+$/, "");
 
 /**
  * CollabFlow - Main Application Shell

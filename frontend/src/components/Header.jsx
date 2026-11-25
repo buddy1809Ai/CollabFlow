@@ -78,7 +78,9 @@ export default function Header({
             <span className="flex items-center gap-1 text-emerald-600 font-semibold">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <Wifi className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">Live: Port 5000</span>
+              <span className="hidden xl:inline">
+                {window.location.hostname === "localhost" ? "Live: Port 5000" : "Live Sync"}
+              </span>
               <span className="xl:hidden">Live</span>
             </span>
           )}
