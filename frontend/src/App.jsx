@@ -1,9 +1,20 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
+import { User, Lock, ArrowRight } from "lucide-react";
 import Canvas from "./components/Canvas";
 import Header from "./components/Header";
 import AiExplainer from "./components/AiExplainer";
 import { generatePrivateRoomId } from "./utils/roomId";
+
+const USER_COLORS = ["#2563eb", "#e11d48", "#059669", "#7c3aed", "#d97706", "#0891b2"];
+const FALLBACK_NAMES = ["Designer", "Architect", "Maker", "Innovator", "Coder", "Artist"];
+
+function createFallbackIdentity() {
+  const randomName = FALLBACK_NAMES[Math.floor(Math.random() * FALLBACK_NAMES.length)];
+  const randomNum = Math.floor(10 + Math.random() * 90);
+  const randomColor = USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
+  return { username: `${randomName}-${randomNum}`, color: randomColor };
+}
 
 // Backend Express & Socket.io server endpoint (uses VITE_SERVER_URL in production, localhost in dev)
 const SERVER_URL = (
@@ -45,18 +56,56 @@ function App() {
   const [generateError, setGenerateError] = useState(null);
   const [generatedInfo, setGeneratedInfo] = useState(null);
 
-  // Generate a random, friendly user identity for this session
-  const currentUser = useMemo(() => {
-    const names = ["Designer", "Architect", "Maker", "Innovator", "Coder", "Artist"];
-    const colors = ["#2563eb", "#e11d48", "#059669", "#7c3aed", "#d97706", "#0891b2"];
-    const randomName = names[Math.floor(Math.random() * names.length)];
-    const randomNum = Math.floor(10 + Math.random() * 90);
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
-    return {
-      username: `${randomName}-${randomNum}`,
-      color: randomColor,
-    };
-  }, []);
+  // User identity (remembers entered name in localStorage; prompts new entrants cleanly)
+  const [fallbackIdentity] = useState(() => createFallbackIdentity());
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const savedName = localStorage.getItem("collabflow_username")?.trim();
+      const savedColor = localStorage.getItem("collabflow_color");
+      if (savedName) {
+        return {
+          username: savedName.slice(0, 24),
+          color: USER_COLORS.includes(savedColor) ? savedColor : fallbackIdentity.color,
+        };
+      }
+    } catch {
+      // Ignore storage access restrictions
+    }
+    return fallbackIdentity;
+  });
+
+  const [isNamePromptOpen, setIsNamePromptOpen] = useState(() => {
+    try {
+      return !localStorage.getItem("collabflow_username")?.trim();
+    } catch {
+      return true;
+    }
+  });
+  const [draftName, setDraftName] = useState("");
+  const [draftColor, setDraftColor] = useState(() => currentUser.color);
+
+  const handleSaveUserIdentity = useCallback(
+    (rawName, nextColor = null) => {
+      const cleanName = (rawName || "").trim().slice(0, 24) || fallbackIdentity.username;
+      const resolvedColor = nextColor || currentUser.color || fallbackIdentity.color;
+      setCurrentUser({ username: cleanName, color: resolvedColor });
+      setIsNamePromptOpen(false);
+      try {
+        localStorage.setItem("collabflow_username", cleanName);
+        localStorage.setItem("collabflow_color", resolvedColor);
+      } catch {
+        // Ignore storage errors
+      }
+      if (socket && socket.connected && roomExplainer?.userId === socket.id) {
+        socket.emit("explainer-toggle", {
+          roomId,
+          username: cleanName,
+          active: true,
+        });
+      }
+    },
+    [currentUser.color, fallbackIdentity.color, fallbackIdentity.username, roomExplainer?.userId, roomId, socket]
+  );
 
   // 1. Synchronize browser URL query param (?room=xyz) immediately when roomId updates
   useEffect(() => {
@@ -248,6 +297,7 @@ function App() {
         connectionStatus={connectionStatus}
         isConnected={connectionStatus === "connected"}
         currentUser={currentUser}
+        onUpdateUsername={(name) => handleSaveUserIdentity(name)}
         roomExplainer={roomExplainer}
         mySocketId={socket?.id || null}
         onExplainBoard={handleOpenAiStudio}
@@ -282,6 +332,83 @@ function App() {
         generateError={generateError}
         generatedInfo={generatedInfo}
       />
+
+      {/* Enter Your Name Modal on Room Entry (remembers name for subsequent visits) */}
+      {isNamePromptOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 backdrop-blur-xs p-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveUserIdentity(draftName, draftColor);
+            }}
+            className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl border border-slate-200"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+                <User className="h-5 w-5" />
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-100 px-2.5 py-1 text-[11px] font-mono font-semibold text-indigo-700">
+                <Lock className="h-3 w-3 text-emerald-600" />
+                {roomId}
+              </span>
+            </div>
+
+            <h2 className="text-lg font-bold text-slate-900">Enter Your Name</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Peers in this room will see your name on your cursor, reactions &amp; Explain Mode.
+            </p>
+
+            <input
+              type="text"
+              autoFocus
+              maxLength={24}
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              placeholder="Your name (e.g. Rahul, Priya)..."
+              className="mt-4 w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+            />
+
+            <div className="mt-3 flex items-center justify-between">
+              <span className="text-[11px] font-medium text-slate-500">Cursor color:</span>
+              <div className="flex items-center gap-1.5">
+                {USER_COLORS.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    onClick={() => setDraftColor(hex)}
+                    style={{ backgroundColor: hex }}
+                    className={`h-5 w-5 rounded-full transition ${
+                      draftColor === hex
+                        ? "ring-2 ring-offset-2 ring-slate-800 scale-110"
+                        : "opacity-75 hover:opacity-100"
+                    }`}
+                    title="Select cursor color"
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center gap-2">
+              <button
+                type="submit"
+                disabled={!draftName.trim()}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-indigo-500/25 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                <span>Join Whiteboard</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveUserIdentity(fallbackIdentity.username, draftColor)}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                title={`Continue as ${fallbackIdentity.username}`}
+              >
+                Guest
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }

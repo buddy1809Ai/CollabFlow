@@ -11,6 +11,7 @@ import {
   Play,
   Square,
   Lock,
+  Pencil,
 } from "lucide-react";
 import { generatePrivateRoomId } from "../utils/roomId";
 
@@ -24,6 +25,7 @@ export default function Header({
   userCount,
   connectionStatus = "connecting", // 'connecting' | 'connected' | 'disconnected'
   currentUser,
+  onUpdateUsername,
   roomExplainer = null, // { userId, username } when Explain Mode is active
   mySocketId = null,
   onExplainBoard,
@@ -35,6 +37,18 @@ export default function Header({
   const [copied, setCopied] = useState(false);
   const [isEditingRoom, setIsEditingRoom] = useState(false);
   const [inputRoomId, setInputRoomId] = useState("");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [inputUserName, setInputUserName] = useState("");
+
+  const handleNameSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = inputUserName.trim();
+    if (trimmed && onUpdateUsername) {
+      onUpdateUsername(trimmed);
+    }
+    setIsEditingName(false);
+    setInputUserName("");
+  };
 
   // Copy shareable private room invite link to clipboard
   const handleCopyLink = () => {
@@ -109,14 +123,53 @@ export default function Header({
 
       {/* Center/Right Controls: User Identity, Room Info, User Count, Replay, AI Studio & Share */}
       <div className="flex flex-wrap items-center gap-1.5 max-w-full pointer-events-auto">
-        {/* Current User Badge (Visible on 1280px+ screens to keep 1024px single-line) */}
+        {/* Editable Current User Identity Badge (Visible on mobile & desktop) */}
         {currentUser && (
-          <div className="hidden xl:flex items-center gap-1.5 rounded-2xl bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
-            <span
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: currentUser.color }}
-            ></span>
-            <span>You: {currentUser.username}</span>
+          <div className="flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
+            {isEditingName ? (
+              <form onSubmit={handleNameSubmit} className="flex items-center gap-1">
+                <input
+                  type="text"
+                  maxLength={24}
+                  value={inputUserName}
+                  onChange={(e) => setInputUserName(e.target.value)}
+                  placeholder="Your name..."
+                  className="w-24 rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-800 outline-none focus:border-indigo-500"
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="rounded-lg bg-indigo-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-indigo-700 transition"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingName(false)}
+                  className="rounded-lg bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-200 transition"
+                >
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setInputUserName(currentUser.username || "");
+                  setIsEditingName(true);
+                }}
+                className="flex items-center gap-1.5 hover:text-indigo-600 transition cursor-pointer"
+                title="Click to edit your display name"
+              >
+                <span
+                  className="h-2.5 w-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: currentUser.color }}
+                ></span>
+                <span className="hidden sm:inline text-slate-400 font-medium">You:</span>
+                <span className="max-w-[110px] truncate">{currentUser.username}</span>
+                <Pencil className="h-3 w-3 text-slate-400 shrink-0" />
+              </button>
+            )}
           </div>
         )}
 
