@@ -2,10 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Reset default margins and enable full height */
+/* Reset default margins and lock to dynamic mobile viewport (avoids 100vh bottom-bar clipping under browser chrome) */
 html, body, #root {
   width: 100%;
   height: 100%;
+  height: 100dvh;
   margin: 0;
   padding: 0;
   overflow: hidden;

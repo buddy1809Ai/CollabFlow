@@ -288,7 +288,7 @@ function App() {
   }, [socket, roomExplainer, roomId, currentUser.username]);
 
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-slate-100">
+    <main className="relative w-screen h-dvh overflow-hidden bg-slate-100">
       {/* Top Header: Room Switcher, Connection Status, Explainer Badge, Replay, AI Studio, Share */}
       <Header
         roomId={roomId}

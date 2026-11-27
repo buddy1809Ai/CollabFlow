@@ -310,6 +310,7 @@ export default function Canvas({
   const laserCtxRef = useRef(null);
   const fileInputRef = useRef(null);
   const shapesMenuRef = useRef(null);
+  const shapesPopupRef = useRef(null);
   const socketRef = useRef(socket);
   socketRef.current = socket;
 
@@ -807,8 +808,14 @@ export default function Canvas({
 
     const configureCanvasSize = (targetCanvas, targetCtx) => {
       const dpr = window.devicePixelRatio || 1;
-      const vw = Math.max(1, window.innerWidth || 0);
-      const vh = Math.max(1, window.innerHeight || 0);
+      const vw = Math.max(
+        1,
+        boardWrapperRef.current?.clientWidth || window.visualViewport?.width || window.innerWidth || 0
+      );
+      const vh = Math.max(
+        1,
+        boardWrapperRef.current?.clientHeight || window.visualViewport?.height || window.innerHeight || 0
+      );
       targetCanvas.style.width = `${vw}px`;
       targetCanvas.style.height = `${vh}px`;
       targetCanvas.width = vw * dpr;
@@ -866,8 +873,10 @@ export default function Canvas({
     };
 
     window.addEventListener("resize", handleResize);
+    window.visualViewport?.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
+      window.visualViewport?.removeEventListener("resize", handleResize);
       if (laserRafId.current) cancelAnimationFrame(laserRafId.current);
       replayTimers.current.forEach((id) => clearTimeout(id));
     };
@@ -2601,12 +2610,18 @@ export default function Canvas({
   useEffect(() => {
     if (!showShapesMenu) return;
     const handleOutsideClick = (e) => {
-      if (shapesMenuRef.current && !shapesMenuRef.current.contains(e.target)) {
+      const inTrigger = shapesMenuRef.current?.contains(e.target);
+      const inPopup = shapesPopupRef.current?.contains(e.target);
+      if (!inTrigger && !inPopup) {
         setShowShapesMenu(false);
       }
     };
     window.addEventListener("mousedown", handleOutsideClick);
-    return () => window.removeEventListener("mousedown", handleOutsideClick);
+    window.addEventListener("touchstart", handleOutsideClick);
+    return () => {
+      window.removeEventListener("mousedown", handleOutsideClick);
+      window.removeEventListener("touchstart", handleOutsideClick);
+    };
   }, [showShapesMenu]);
 
   // Global mousemove/mouseup listeners for dragging the Active Media Quick Controls Bar
@@ -2680,7 +2695,7 @@ export default function Canvas({
       ref={boardWrapperRef}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleCanvasDrop}
-      className={`relative w-screen h-screen overflow-hidden select-none transition-colors duration-200 ${
+      className={`relative w-screen h-dvh overflow-hidden select-none transition-colors duration-200 ${
         showGrid ? "bg-slate-50" : "bg-white"
       }`}
       style={
@@ -3137,7 +3152,10 @@ export default function Canvas({
 
       {/* Mobile Pinch Board Zoom Pill + Watch Mode Quick Reaction Chips (No Sidebar/Chat) */}
       {(boardZoom > 1.02 || isWatchMode) && (
-        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 max-w-[94vw]">
+        <div
+          style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+          className="pointer-events-none fixed left-1/2 -translate-x-1/2 z-40 flex flex-wrap items-center justify-center gap-2 max-w-[94vw]"
+        >
           {boardZoom > 1.02 && (
             <button
               type="button"
@@ -3171,8 +3189,73 @@ export default function Canvas({
         </div>
       )}
 
-      {/* Bottom Floating Toolbar (Single scrollable row on phones, overflowing dropdowns on lg+) */}
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex max-w-[96vw] flex-nowrap overflow-x-auto lg:overflow-visible justify-start sm:justify-center items-center gap-0.5 whitespace-nowrap rounded-2xl bg-white/95 px-2 py-1.5 shadow-2xl backdrop-blur-md border border-slate-200">
+      {/* Floating 6-Shape Picker (Sibling outside overflow-x-auto toolbar so never clipped on mobile) */}
+      {showShapesMenu && (() => {
+        const triggerRect = shapesMenuRef.current?.getBoundingClientRect();
+        const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+        const leftPx = triggerRect
+          ? Math.max(12, Math.min(vw - 268, Math.round(triggerRect.left + triggerRect.width / 2 - 128)))
+          : Math.max(12, Math.round(vw / 2 - 128));
+        return (
+          <div
+            ref={shapesPopupRef}
+            style={{
+              left: `${leftPx}px`,
+              bottom: "calc(4.75rem + env(safe-area-inset-bottom))",
+            }}
+            className="fixed w-64 rounded-2xl bg-white p-2.5 shadow-2xl border border-slate-200 z-50"
+          >
+            <div className="px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                Select Shape
+              </span>
+              <span className="text-[10px] text-slate-400">Drag on board</span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {SHAPE_OPTIONS.map((shape) => {
+                const IconComponent = shape.Icon;
+                const active = tool === shape.id;
+                return (
+                  <button
+                    key={shape.id}
+                    type="button"
+                    onClick={() => {
+                      setTool(shape.id);
+                      setLastShape(shape.id);
+                      setShowShapesMenu(false);
+                    }}
+                    className={`flex items-center justify-between rounded-xl px-2.5 py-2 text-xs font-semibold transition ${
+                      active
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <IconComponent className="h-4 w-4 shrink-0" />
+                      <span>{shape.label}</span>
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono px-1 rounded ${
+                        active
+                          ? "bg-indigo-500 text-indigo-100"
+                          : "bg-slate-100 text-slate-400"
+                      }`}
+                    >
+                      {shape.shortcut}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Bottom Floating Toolbar (Fixed to visible mobile/desktop viewport + smooth touch horizontal swipe) */}
+      <div
+        style={{ bottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        className="fixed left-1/2 -translate-x-1/2 z-40 flex max-w-[96vw] flex-nowrap overflow-x-auto lg:overflow-visible touch-pan-x overscroll-x-contain justify-start sm:justify-center items-center gap-0.5 whitespace-nowrap rounded-2xl bg-white/95 px-2 py-1.5 shadow-2xl backdrop-blur-md border border-slate-200"
+      >
         
         {/* Tool Group: Move, Pen, Highlighter, Eraser, Text, Note, Shapes, Laser */}
         <div className="flex items-center gap-0.5 pr-1 border-r border-slate-200">
@@ -3301,53 +3384,6 @@ export default function Canvas({
                 }`}
               />
             </button>
-
-            {showShapesMenu && (
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 rounded-2xl bg-white p-2.5 shadow-2xl border border-slate-200 z-40">
-                <div className="px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Select Shape
-                  </span>
-                  <span className="text-[10px] text-slate-400">Drag on board</span>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {SHAPE_OPTIONS.map((shape) => {
-                    const IconComponent = shape.Icon;
-                    const active = tool === shape.id;
-                    return (
-                      <button
-                        key={shape.id}
-                        type="button"
-                        onClick={() => {
-                          setTool(shape.id);
-                          setLastShape(shape.id);
-                          setShowShapesMenu(false);
-                        }}
-                        className={`flex items-center justify-between rounded-xl px-2.5 py-2 text-xs font-semibold transition ${
-                          active
-                            ? "bg-indigo-600 text-white shadow-sm"
-                            : "text-slate-700 hover:bg-slate-100"
-                        }`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <IconComponent className="h-4 w-4 shrink-0" />
-                          <span>{shape.label}</span>
-                        </span>
-                        <span
-                          className={`text-[10px] font-mono px-1 rounded ${
-                            active
-                              ? "bg-indigo-500 text-indigo-100"
-                              : "bg-slate-100 text-slate-400"
-                          }`}
-                        >
-                          {shape.shortcut}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
 
           <button
