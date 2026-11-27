@@ -12,8 +12,8 @@ import {
 
 const DIAGRAM_PRESETS = [
   "Client -> Load Balancer -> 2 API Servers -> Redis Cache -> Database",
-  "User Login Flow: Enter Credentials -> Validate JWT -> Decision Auth OK -> Dashboard or Error",
-  "React Frontend -> Express REST API -> Gemini Vision AI -> Response Panel",
+  "TCP 3-Way Handshake: Client SYN -> Server SYN-ACK -> Client ACK -> Connected",
+  "OS Process States: New -> Ready -> Running -> Waiting -> Terminated",
 ];
 
 /**
@@ -307,16 +307,29 @@ export default function AiExplainer({
               )}
 
               {generatedInfo && !isGenerating && (
-                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 flex items-start gap-2">
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">
-                      Drew &ldquo;{generatedInfo.title}&rdquo; ({generatedInfo.count} elements)
-                    </p>
-                    <p className="text-[11px] text-emerald-700 mt-0.5">
-                      Synced with everyone in the room! Use Ctrl+Z anytime to undo.
-                    </p>
+                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">
+                        Drew &ldquo;{generatedInfo.title}&rdquo; ({generatedInfo.count} elements
+                        {generatedInfo.durationMs
+                          ? ` in ${(generatedInfo.durationMs / 1000).toFixed(1)}s`
+                          : ""}
+                        )
+                      </p>
+                      <p className="text-[11px] text-emerald-700 mt-0.5">
+                        Synced with everyone in the room! Use Ctrl+Z anytime to undo.
+                      </p>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="w-full rounded-lg bg-emerald-600 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 transition"
+                  >
+                    View Diagram on Board
+                  </button>
                 </div>
               )}
 

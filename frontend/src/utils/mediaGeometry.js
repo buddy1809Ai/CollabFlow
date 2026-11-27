@@ -13,43 +13,38 @@ export const MAX_ZOOM = 3.0;
  */
 export function fitItemToViewport(item, viewportW = window.innerWidth, viewportH = window.innerHeight) {
   if (!item) return null;
-  if (item.kind === "doc") {
-    const maxW = Math.max(240, viewportW - 24);
-    const maxH = Math.max(180, viewportH - 140);
-    const width = Math.max(200, Math.min(item.width || 400, maxW));
-    const height = Math.max(140, Math.min(item.height || 340, maxH));
+  if (item.kind === "doc" || item.kind === "note") {
+    const isNote = item.kind === "note";
+    const minW = isNote ? 150 : 200;
+    const minH = isNote ? 110 : 140;
+    const maxW = Math.max(minW + 20, viewportW - 24);
+    const maxH = Math.max(minH + 20, viewportH - 140);
+    const width = Math.max(minW, Math.min(item.width || (isNote ? 210 : 400), maxW));
+    const height = Math.max(minH, Math.min(item.height || (isNote ? 145 : 340), maxH));
     const x = Math.max(8, Math.min(item.x ?? 20, Math.max(8, viewportW - width - 8)));
     const y = Math.max(64, Math.min(item.y ?? 120, Math.max(64, viewportH - height - 76)));
     return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
   }
 
-  const zoom = item.contentZoom || 1;
   const pdfRatio =
     item.aspectRatio || (item.width && item.height ? item.width / item.height : 0.7727);
-  const rawBaseW =
-    item.baseWidth || (zoom < 1 ? item.width / Math.max(0.25, zoom) : item.width) || 360;
-  const rawBaseH = item.baseHeight || Math.round(rawBaseW / pdfRatio);
+  let width = Math.max(140, Math.round(item.width || item.baseWidth || 360));
+  let height = Math.max(110, Math.round(item.height || item.baseHeight || Math.round(width / pdfRatio)));
 
   const availW = Math.max(220, viewportW - 24);
   const availH = Math.max(160, viewportH - 150);
 
-  let baseW = rawBaseW;
-  let baseH = rawBaseH;
-  if (baseW > availW || baseH > availH) {
-    const downScale = Math.min(availW / baseW, availH / baseH);
-    baseW = Math.max(160, Math.round(baseW * downScale));
-    baseH = Math.max(120, Math.round(baseH * downScale));
+  if (width > availW || height > availH) {
+    const downScale = Math.min(availW / width, availH / height);
+    width = Math.max(140, Math.round(width * downScale));
+    height = Math.max(110, Math.round(height * downScale));
   }
 
   // Ensure frame never becomes narrower horizontally than content height allows (prevents bottom white gaps)
-  const minWForHeight = Math.round(baseH * pdfRatio);
-  if (baseW < minWForHeight) {
-    baseH = Math.max(110, Math.round(baseW / pdfRatio));
+  const minWForHeight = Math.round(height * pdfRatio);
+  if (width < minWForHeight) {
+    height = Math.max(110, Math.round(width / pdfRatio));
   }
-
-  const frameScale = Math.min(1, zoom);
-  const width = Math.max(140, Math.round(baseW * frameScale));
-  const height = Math.max(110, Math.round(baseH * frameScale));
 
   const x = Math.max(8, Math.min(item.x ?? 20, Math.max(8, viewportW - width - 8)));
   const y = Math.max(64, Math.min(item.y ?? 120, Math.max(64, viewportH - height - 76)));
@@ -59,14 +54,14 @@ export function fitItemToViewport(item, viewportW = window.innerWidth, viewportH
     y: Math.round(y),
     width,
     height,
-    baseWidth: Math.round(baseW),
-    baseHeight: Math.round(baseH),
+    baseWidth: width,
+    baseHeight: height,
     aspectRatio: pdfRatio,
   };
 }
 
 /**
- * Compute zoom update for PDF/Image (preserving widened or portrait frame ratio) or font-zoom for Docs.
+ * Compute zoom update INSIDE the fixed media frame without altering outer x, y, width, height.
  */
 export function computeZoomPatch(
   item,
@@ -80,52 +75,22 @@ export function computeZoomPatch(
   const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(targetZoom.toFixed(3))));
   if (nextZoom === oldZoom) return null;
 
-  if (item.kind === "doc") {
+  if (item.kind === "doc" || item.kind === "note") {
     return { contentZoom: nextZoom };
   }
 
   const pdfRatio =
     item.aspectRatio || (item.width && item.height ? item.width / item.height : 0.7727);
-  const baseW =
-    item.baseWidth || (oldZoom < 1 ? Math.round(item.width / Math.max(0.25, oldZoom)) : item.width);
-  const baseH = item.baseHeight || Math.round(baseW / pdfRatio);
+  const frameW = Math.max(140, item.width || 360);
+  const frameH = Math.max(110, item.height || Math.round(frameW / pdfRatio));
 
-  const nextFrameScale = Math.min(1, nextZoom);
-  const availW = Math.max(200, viewportW - 24);
-  const availH = Math.max(160, viewportH - 150);
-
-  let nextW = Math.max(140, Math.round(baseW * nextFrameScale));
-  let nextH = Math.max(110, Math.round(baseH * nextFrameScale));
-  if (nextW > availW || nextH > availH) {
-    const down = Math.min(availW / nextW, availH / nextH);
-    nextW = Math.max(140, Math.round(nextW * down));
-    nextH = Math.max(110, Math.round(nextH * down));
-  }
-
-  const centerX = item.x + item.width / 2;
-  const centerY = item.y + item.height / 2;
-  const nextX = Math.max(
-    8,
-    Math.min(Math.round(centerX - nextW / 2), Math.max(8, viewportW - nextW - 8))
-  );
-  const nextY = Math.max(
-    64,
-    Math.min(Math.round(centerY - nextH / 2), Math.max(64, viewportH - nextH - 76))
-  );
-
-  const contentScale = Math.max(1, nextZoom);
-  const maxScrollX = Math.max(0, Math.round(nextW * contentScale - nextW));
-  const maxScrollY = Math.max(0, Math.round((nextW * contentScale) / pdfRatio - nextH));
+  const contentW = Math.round(frameW * nextZoom);
+  const contentH = Math.round(contentW / pdfRatio);
+  const maxScrollX = Math.max(0, contentW - frameW);
+  const maxScrollY = Math.max(0, contentH - frameH);
 
   const patch = {
     contentZoom: nextZoom,
-    baseWidth: Math.round(baseW),
-    baseHeight: Math.round(baseH),
-    aspectRatio: pdfRatio,
-    x: nextX,
-    y: nextY,
-    width: nextW,
-    height: nextH,
   };
 
   if (maxScrollX === 0 && maxScrollY === 0) {
@@ -133,13 +98,12 @@ export function computeZoomPatch(
     patch.scrollY = 0;
   } else {
     const relX = focusPoint
-      ? Math.max(0, Math.min(nextW, focusPoint.clientX - nextX))
-      : nextW / 2;
+      ? Math.max(0, Math.min(frameW, focusPoint.clientX - item.x))
+      : frameW / 2;
     const relY = focusPoint
-      ? Math.max(0, Math.min(nextH, focusPoint.clientY - nextY))
-      : nextH / 2;
-    const oldContentScale = Math.max(1, oldZoom);
-    const scaleFactor = contentScale / oldContentScale;
+      ? Math.max(0, Math.min(frameH, focusPoint.clientY - item.y))
+      : frameH / 2;
+    const scaleFactor = nextZoom / oldZoom;
 
     patch.scrollX = Math.max(
       0,

@@ -10,7 +10,9 @@ import {
   Sparkles,
   Play,
   Square,
+  Lock,
 } from "lucide-react";
+import { generatePrivateRoomId } from "../utils/roomId";
 
 /**
  * CollabFlow - Header Component
@@ -22,6 +24,8 @@ export default function Header({
   userCount,
   connectionStatus = "connecting", // 'connecting' | 'connected' | 'disconnected'
   currentUser,
+  roomExplainer = null, // { userId, username } when Explain Mode is active
+  mySocketId = null,
   onExplainBoard,
   isAiLoading = false,
   onReplay,
@@ -32,9 +36,9 @@ export default function Header({
   const [isEditingRoom, setIsEditingRoom] = useState(false);
   const [inputRoomId, setInputRoomId] = useState("");
 
-  // Copy shareable room link to clipboard
+  // Copy shareable private room invite link to clipboard
   const handleCopyLink = () => {
-    const shareUrl = `${window.location.origin}?room=${encodeURIComponent(roomId)}`;
+    const shareUrl = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
     navigator.clipboard.writeText(shareUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -52,10 +56,10 @@ export default function Header({
     setInputRoomId("");
   };
 
-  // Generate a random room ID (e.g. room-742)
+  // Generate a fresh private unguessable room ID (e.g. cf-8k4m2p9x)
   const handleCreateRandomRoom = () => {
-    const randomId = `room-${Math.floor(100 + Math.random() * 900)}`;
-    onJoinRoom(randomId);
+    const privateId = generatePrivateRoomId();
+    onJoinRoom(privateId);
     setIsEditingRoom(false);
   };
 
@@ -104,7 +108,7 @@ export default function Header({
       </div>
 
       {/* Center/Right Controls: User Identity, Room Info, User Count, Replay, AI Studio & Share */}
-      <div className="flex items-center gap-1.5 pointer-events-auto">
+      <div className="flex flex-wrap items-center gap-1.5 max-w-full pointer-events-auto">
         {/* Current User Badge (Visible on 1280px+ screens to keep 1024px single-line) */}
         {currentUser && (
           <div className="hidden xl:flex items-center gap-1.5 rounded-2xl bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
@@ -144,8 +148,17 @@ export default function Header({
             </form>
           ) : (
             <div className="flex items-center gap-2">
-              <span className="text-slate-400 font-medium">Room:</span>
-              <span className="font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+              <span
+                className="flex items-center gap-1 text-slate-400 font-medium"
+                title="Private room — invite only via link or QR code"
+              >
+                <Lock className="h-3 w-3 text-emerald-600" />
+                <span className="hidden sm:inline">Room:</span>
+              </span>
+              <span
+                className="font-bold font-mono text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100"
+                title={`Private room ID: ${roomId}`}
+              >
                 {roomId}
               </span>
               <button
@@ -155,7 +168,7 @@ export default function Header({
                   setIsEditingRoom(true);
                 }}
                 className="text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition"
-                title="Switch Room"
+                title="Join another room by code"
               >
                 <DoorOpen className="h-3.5 w-3.5" />
               </button>
@@ -163,7 +176,7 @@ export default function Header({
                 type="button"
                 onClick={handleCreateRandomRoom}
                 className="flex items-center gap-1 text-xs text-slate-600 hover:text-indigo-600 px-1.5 py-0.5 rounded-md hover:bg-slate-100 transition font-medium"
-                title="Create a new room"
+                title="Create a brand-new private room"
               >
                 <Plus className="h-3 w-3" /> New
               </button>
@@ -172,12 +185,25 @@ export default function Header({
         </div>
 
         {/* Room Occupants User Count Badge */}
-        <div className="flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
+        <div className="flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700 whitespace-nowrap">
           <Users className="h-4 w-4 text-indigo-600" />
           <span>
             {userCount} {userCount === 1 ? "user" : "users"}
           </span>
         </div>
+
+        {/* Explainer Mode Active Badge ("Rahul is explaining" + Watch Mode pill for peers) */}
+        {roomExplainer && (
+          <div className="flex items-center gap-1.5 rounded-2xl bg-blue-600 px-3 py-1.5 shadow-lg shadow-blue-500/25 text-xs font-semibold text-white">
+            <span className="h-2 w-2 rounded-full bg-white animate-pulse"></span>
+            <span>{roomExplainer.username} is explaining</span>
+            {mySocketId && roomExplainer.userId !== mySocketId && (
+              <span className="rounded-full bg-blue-500/90 border border-blue-300/60 px-1.5 py-0.5 text-[10px]">
+                Watch Mode
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Time-Lapse Session Replay Button */}
         {onReplay && (
@@ -228,7 +254,7 @@ export default function Header({
           </button>
         )}
 
-        {/* 1-Click Share Room Button */}
+        {/* 1-Click Private Invite Link Button */}
         <button
           type="button"
           onClick={handleCopyLink}
@@ -237,7 +263,7 @@ export default function Header({
               ? "bg-emerald-600 text-white border-emerald-600 shadow-emerald-500/20"
               : "bg-white/95 text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-indigo-600"
           }`}
-          title="Copy room invite link"
+          title="Copy private room invite link"
         >
           {copied ? (
             <>
@@ -247,8 +273,8 @@ export default function Header({
           ) : (
             <>
               <Share2 className="h-4 w-4 text-indigo-600" />
-              <span className="hidden xl:inline">Share Room</span>
-              <span className="xl:hidden">Share</span>
+              <span className="hidden xl:inline">Invite</span>
+              <span className="xl:hidden">Invite</span>
             </>
           )}
         </button>

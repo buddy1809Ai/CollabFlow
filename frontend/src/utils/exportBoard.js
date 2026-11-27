@@ -1,8 +1,9 @@
 /**
  * Composite Board Snapshot Utility
- * Merges white background + all movable BoardMediaLayer items (preserving aspect-locked zoom & scroll crop)
+ * Merges white background + all movable BoardMediaLayer items (preserving aspect-locked zoom, scroll crop & pinned PDF/Image ink)
  * + foreground HTML5 drawing canvas strokes into a single crisp high-DPI PNG data URL.
  */
+import { renderAllMediaAnnotations } from "./mediaAnnotations";
 
 function loadImageAsync(src) {
   return new Promise((resolve, reject) => {
@@ -30,7 +31,7 @@ function wrapLines(ctx, text, maxWidth) {
   return lines;
 }
 
-export async function buildCompositeBoardDataUrl(drawingCanvas, boardItems = []) {
+async function renderCompositeCanvas(drawingCanvas, boardItems = []) {
   if (!drawingCanvas) return null;
 
   const exportCanvas = document.createElement("canvas");
@@ -66,13 +67,29 @@ export async function buildCompositeBoardDataUrl(drawingCanvas, boardItems = [])
         ctx.rect(item.x, item.y, item.width, item.height);
         ctx.clip();
 
-        // Unified Fit-to-Width draw matching DOM viewport (covers <=100%, widened & >100% zoom cleanly)
-        const contentScale = Math.max(1, zoom);
-        const drawW = item.width * contentScale;
+        // Zoom inside fixed card box: center smoothly when zoomed out (<100%), apply scroll crop when zoomed in
+        const drawW = item.width * zoom;
         const drawH = drawW * (img.height / Math.max(1, img.width));
         const sx = item.scrollX || 0;
         const sy = item.scrollY || 0;
-        ctx.drawImage(img, item.x - sx, item.y - sy, drawW, drawH);
+        const offsetX = drawW < item.width ? (item.width - drawW) / 2 : -sx;
+        const offsetY = drawH < item.height ? (item.height - drawH) / 2 : -sy;
+        ctx.drawImage(img, item.x + offsetX, item.y + offsetY, drawW, drawH);
+
+        // Composite PDF/Image page-pinned ink/highlighter/shape/text annotations cleanly via offscreen layer (eraser-safe)
+        const pageKey = String(item.currentPage || 1);
+        const pageOps = item.annotationsByPage?.[pageKey];
+        if (Array.isArray(pageOps) && pageOps.length > 0 && drawW > 0 && drawH > 0) {
+          const annCanvas = document.createElement("canvas");
+          const annScale = 2;
+          annCanvas.width = Math.max(1, Math.round(drawW * annScale));
+          annCanvas.height = Math.max(1, Math.round(drawH * annScale));
+          const annCtx = annCanvas.getContext("2d");
+          if (annCtx) {
+            renderAllMediaAnnotations(annCtx, pageOps, annCanvas.width, annCanvas.height);
+            ctx.drawImage(annCanvas, item.x + offsetX, item.y + offsetY, drawW, drawH);
+          }
+        }
 
         ctx.restore();
 
@@ -135,6 +152,61 @@ export async function buildCompositeBoardDataUrl(drawingCanvas, boardItems = [])
       }
 
       ctx.restore();
+    } else if (item.kind === "note") {
+      ctx.save();
+      ctx.shadowColor = "rgba(15, 23, 42, 0.14)";
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 5;
+
+      ctx.fillStyle = item.bgColor || "#fef08a";
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(item.x, item.y, item.width, item.height, 12);
+      else ctx.rect(item.x, item.y, item.width, item.height);
+      ctx.fill();
+
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = item.borderColor || "#eab308";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Top darker tape strip
+      ctx.save();
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(item.x + 1, item.y + 1, item.width - 2, item.height - 2, 11);
+      else ctx.rect(item.x + 1, item.y + 1, item.width - 2, item.height - 2);
+      ctx.clip();
+      ctx.fillStyle = item.headerColor || "rgba(234, 179, 8, 0.35)";
+      ctx.fillRect(item.x, item.y, item.width, 20);
+      ctx.restore();
+
+      const noteText = item.plainText ?? item.text ?? "";
+      const fontSize = Math.round(13 * (item.contentZoom || 1));
+      ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+      ctx.fillStyle = item.textColor || "#422006";
+      ctx.textBaseline = "top";
+      ctx.textAlign = "left";
+
+      ctx.beginPath();
+      ctx.rect(item.x + 8, item.y + 24, Math.max(20, item.width - 16), Math.max(20, item.height - 32));
+      ctx.clip();
+
+      const lineHeight = fontSize * 1.4;
+      let cursorY = item.y + 28;
+      for (const para of noteText.split("\n")) {
+        if (!para.trim()) {
+          cursorY += lineHeight * 0.65;
+          continue;
+        }
+        for (const line of wrapLines(ctx, para, Math.max(40, item.width - 28))) {
+          if (cursorY > item.y + item.height - 10) break;
+          ctx.fillText(line, item.x + 14, cursorY);
+          cursorY += lineHeight;
+        }
+        if (cursorY > item.y + item.height - 10) break;
+      }
+
+      ctx.restore();
     }
   }
 
@@ -146,5 +218,34 @@ export async function buildCompositeBoardDataUrl(drawingCanvas, boardItems = [])
   ctx.drawImage(drawingCanvas, 0, 0);
   ctx.restore();
 
-  return exportCanvas.toDataURL("image/png");
+  return exportCanvas;
+}
+
+export async function buildCompositeBoardDataUrl(drawingCanvas, boardItems = []) {
+  const exportCanvas = await renderCompositeCanvas(drawingCanvas, boardItems);
+  return exportCanvas ? exportCanvas.toDataURL("image/png") : null;
+}
+
+/**
+ * Fast lightweight JPEG snapshot (~70KB) for rapid Gemini Vision uploads.
+ */
+export async function buildAiCompositeDataUrl(drawingCanvas, boardItems = []) {
+  const exportCanvas = await renderCompositeCanvas(drawingCanvas, boardItems);
+  if (!exportCanvas) return null;
+
+  const maxDim = 1200;
+  const longest = Math.max(exportCanvas.width, exportCanvas.height);
+  if (longest <= maxDim) {
+    return exportCanvas.toDataURL("image/jpeg", 0.82);
+  }
+
+  const scale = maxDim / longest;
+  const thumb = document.createElement("canvas");
+  thumb.width = Math.max(1, Math.round(exportCanvas.width * scale));
+  thumb.height = Math.max(1, Math.round(exportCanvas.height * scale));
+  const tCtx = thumb.getContext("2d", { alpha: false });
+  tCtx.fillStyle = "#ffffff";
+  tCtx.fillRect(0, 0, thumb.width, thumb.height);
+  tCtx.drawImage(exportCanvas, 0, 0, thumb.width, thumb.height);
+  return thumb.toDataURL("image/jpeg", 0.82);
 }

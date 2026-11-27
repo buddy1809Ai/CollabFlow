@@ -9,6 +9,7 @@ import React, {
 import {
   FileText,
   FileType2,
+  StickyNote,
   Image as ImageIcon,
   ZoomIn,
   ZoomOut,
@@ -16,8 +17,23 @@ import {
   GripHorizontal,
   ChevronLeft,
   ChevronRight,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { computeZoomPatch } from "../utils/mediaGeometry";
+import {
+  renderAllMediaAnnotations,
+  renderMediaAnnotationOp,
+} from "../utils/mediaAnnotations";
+
+const OVERLAY_BASE_W = 1400;
+
+const NOTE_THEMES = [
+  { name: "Yellow", bgColor: "#fef08a", headerColor: "#fde047", borderColor: "#eab308", textColor: "#422006" },
+  { name: "Pink", bgColor: "#fbcfe8", headerColor: "#f9a8d4", borderColor: "#ec4899", textColor: "#500724" },
+  { name: "Blue", bgColor: "#bfdbfe", headerColor: "#93c5fd", borderColor: "#3b82f6", textColor: "#172554" },
+  { name: "Green", bgColor: "#bbf7d0", headerColor: "#86efac", borderColor: "#22c55e", textColor: "#052e16" },
+];
 
 /**
  * BoardMediaLayer
@@ -90,12 +106,58 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
 ) {
   const dragActionRef = useRef(null);
   const scrollRefs = useRef({});
+  const cardRefs = useRef({});
+  const overlayRefs = useRef({});
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const callbacksRef = useRef({ onSelect, onUpdateItem, onCommitSync, onPanStateChange });
   callbacksRef.current = { onSelect, onUpdateItem, onCommitSync, onPanStateChange };
 
+  // Re-render page-pinned PDF/Image vector annotations whenever items, pages, or history restore changes
+  useEffect(() => {
+    for (const item of items || []) {
+      if (item.kind !== "pdf" && item.kind !== "image") continue;
+      const overlayCanvas = overlayRefs.current[item.id];
+      if (!overlayCanvas) continue;
+      const oCtx = overlayCanvas.getContext("2d");
+      if (!oCtx) continue;
+      const pageKey = String(item.currentPage || 1);
+      const ops = item.annotationsByPage?.[pageKey] || [];
+      renderAllMediaAnnotations(oCtx, ops, overlayCanvas.width, overlayCanvas.height);
+    }
+  }, [items]);
+
   const [activePanId, setActivePanId] = useState(null);
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+
+  useEffect(() => {
+    if (!isInteractive && editingNoteId) {
+      setEditingNoteId(null);
+    }
+  }, [isInteractive, editingNoteId]);
+
+  const commitNoteEdit = useCallback(
+    (item) => {
+      if (!item || editingNoteId !== item.id) return;
+      const trimmed = editingNoteText.trim();
+      setEditingNoteId(null);
+      if (!trimmed) {
+        onRemoveItem?.(item.id);
+        return;
+      }
+      onUpdateItem(
+        item.id,
+        {
+          text: trimmed,
+          plainText: trimmed,
+          title: trimmed.length > 22 ? `${trimmed.slice(0, 22)}...` : trimmed,
+        },
+        true
+      );
+    },
+    [editingNoteId, editingNoteText, onRemoveItem, onUpdateItem]
+  );
 
   // Sync programmatic scroll positions (zoom-to-cursor, ▲/▼ scroll buttons, page resets, peers)
   useEffect(() => {
@@ -172,12 +234,91 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
     document.body.style.userSelect = "none";
   }, []);
 
-  // Allow Canvas layer to delegate left-click directly on a PDF into Acrobat pan/move
+  // Expose Acrobat interaction + subpixel PDF/Image annotation overlay hooks to Canvas layer
   useImperativeHandle(
     ref,
     () => ({
       startInteractionFromCanvas: (item, clientX, clientY) => {
         beginDrag(item, clientX, clientY);
+      },
+      hitTestAnnotatableItem: (clientX, clientY) => {
+        const list = itemsRef.current || [];
+        for (let i = list.length - 1; i >= 0; i--) {
+          const it = list[i];
+          if (it.kind !== "pdf" && it.kind !== "image") continue;
+          const cardEl = cardRefs.current[it.id];
+          const overlayEl = overlayRefs.current[it.id];
+          if (!cardEl || !overlayEl) continue;
+          const cardRect = cardEl.getBoundingClientRect();
+          const overlayRect = overlayEl.getBoundingClientRect();
+          if (
+            clientX >= cardRect.left &&
+            clientX <= cardRect.right &&
+            clientY >= cardRect.top &&
+            clientY <= cardRect.bottom &&
+            clientX >= overlayRect.left &&
+            clientX <= overlayRect.right &&
+            clientY >= overlayRect.top &&
+            clientY <= overlayRect.bottom
+          ) {
+            return {
+              id: it.id,
+              page: String(it.currentPage || 1),
+              refWidth: it.width || 400,
+            };
+          }
+        }
+        return null;
+      },
+      clientToNormalizedPoint: (itemId, clientX, clientY) => {
+        const overlayEl = overlayRefs.current[itemId];
+        if (!overlayEl) return null;
+        const rect = overlayEl.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        const nx = Math.max(0, Math.min(1, Number(((clientX - rect.left) / rect.width).toFixed(4))));
+        const ny = Math.max(0, Math.min(1, Number(((clientY - rect.top) / rect.height).toFixed(4))));
+        return { nx, ny };
+      },
+      drawLiveStrokeSegment: (itemId, prevPt, currPt, { color, normWidth, isEraser }) => {
+        const canvas = overlayRefs.current[itemId];
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        renderMediaAnnotationOp(
+          ctx,
+          {
+            kind: "stroke",
+            points: [
+              [prevPt.nx, prevPt.ny],
+              [currPt.nx, currPt.ny],
+            ],
+            color,
+            normWidth,
+            isEraser,
+          },
+          canvas.width,
+          canvas.height
+        );
+      },
+      previewLiveAnnotation: (itemId, pageKey, liveOp) => {
+        const canvas = overlayRefs.current[itemId];
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const target = (itemsRef.current || []).find((it) => it.id === itemId);
+        const committedOps = target?.annotationsByPage?.[String(pageKey || 1)] || [];
+        renderAllMediaAnnotations(ctx, committedOps, canvas.width, canvas.height);
+        if (liveOp) renderMediaAnnotationOp(ctx, liveOp, canvas.width, canvas.height);
+      },
+      redrawItemOverlay: (itemId, pageKey = null) => {
+        const canvas = overlayRefs.current[itemId];
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const target = (itemsRef.current || []).find((it) => it.id === itemId);
+        const pKey = String(pageKey || target?.currentPage || 1);
+        const ops = target?.annotationsByPage?.[pKey] || [];
+        renderAllMediaAnnotations(ctx, ops, canvas.width, canvas.height);
       },
     }),
     [beginDrag]
@@ -206,18 +347,23 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
       }
     };
 
-    const handleMouseMove = (e) => {
+    const handlePointerMove = (e) => {
       const action = dragActionRef.current;
       if (!action) return;
 
-      // Guard against mouse button released outside browser window
-      if ((e.buttons & 1) === 0) {
+      const isTouch = Boolean(e.touches);
+      if (isTouch) {
+        if (e.touches.length !== 1) return;
+        e.preventDefault();
+      } else if ((e.buttons & 1) === 0) {
+        // Guard against mouse button released outside browser window
         finishDrag(e.clientX, e.clientY);
         return;
       }
 
-      const dx = e.clientX - action.startMouseX;
-      const dy = e.clientY - action.startMouseY;
+      const pt = isTouch ? e.touches[0] : e;
+      const dx = pt.clientX - action.startMouseX;
+      const dy = pt.clientY - action.startMouseY;
 
       if (action.kind === "pan-scroll") {
         const el = scrollRefs.current[action.id];
@@ -251,10 +397,11 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
         const origRight = action.origX + action.origW;
         const origBottom = action.origY + action.origH;
 
-        if (action.itemKind === "doc") {
-          // Word / Text cards reflow text cleanly, so free width & height stay flexible
-          const minW = 200;
-          const minH = 140;
+        if (action.itemKind === "doc" || action.itemKind === "note") {
+          // Word / Text / Sticky Note cards reflow text cleanly, so free width & height stay flexible
+          const isNote = action.itemKind === "note";
+          const minW = isNote ? 150 : 200;
+          const minH = isNote ? 110 : 140;
           let nextX = action.origX;
           let nextY = action.origY;
           let nextW = action.origW;
@@ -335,8 +482,7 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
         const nextX = dir.includes("w") ? Math.round(origRight - nextW) : action.origX;
         const nextY = dir.includes("n") ? Math.round(origBottom - nextH) : action.origY;
 
-        const baseScale = action.contentZoom < 1 ? action.contentZoom : 1;
-        const contentScale = Math.max(1, action.contentZoom);
+        const contentScale = action.contentZoom || 1;
         const scrollEl = scrollRefs.current[action.id];
         const nextMaxScrollX = Math.max(0, Math.round(nextW * contentScale - nextW));
         const nextMaxScrollY = Math.max(0, Math.round((nextW * contentScale) / ratio - nextH));
@@ -346,8 +492,8 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
           y: nextY,
           width: nextW,
           height: nextH,
-          baseWidth: Math.round(nextW / Math.max(0.25, baseScale)),
-          baseHeight: Math.round(nextH / Math.max(0.25, baseScale)),
+          baseWidth: nextW,
+          baseHeight: nextH,
           scrollX: scrollEl
             ? Math.max(0, Math.min(nextMaxScrollX, scrollEl.scrollLeft))
             : 0,
@@ -358,15 +504,24 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
       }
     };
 
-    const handleMouseUp = (e) => finishDrag(e.clientX, e.clientY);
+    const handlePointerUp = (e) => {
+      const pt = e.changedTouches?.[0] || e;
+      finishDrag(pt?.clientX ?? null, pt?.clientY ?? null);
+    };
     const handleWindowBlur = () => finishDrag();
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", handlePointerUp);
+    window.addEventListener("touchmove", handlePointerMove, { passive: false });
+    window.addEventListener("touchend", handlePointerUp);
+    window.addEventListener("touchcancel", handlePointerUp);
     window.addEventListener("blur", handleWindowBlur);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", handlePointerUp);
+      window.removeEventListener("touchmove", handlePointerMove);
+      window.removeEventListener("touchend", handlePointerUp);
+      window.removeEventListener("touchcancel", handlePointerUp);
       window.removeEventListener("blur", handleWindowBlur);
       if (dragActionRef.current) {
         dragActionRef.current = null;
@@ -379,10 +534,12 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
   if (!items || items.length === 0) return null;
 
   const startHandleDrag = (e, item, kind) => {
-    if (e.button !== 0) return;
+    if (!e.touches && e.button !== 0) return;
+    if (e.touches && e.touches.length !== 1) return;
     e.stopPropagation();
-    e.preventDefault();
-    beginDrag(item, e.clientX, e.clientY, kind);
+    if (!e.touches) e.preventDefault();
+    const pt = e.touches?.[0] || e;
+    beginDrag(item, pt.clientX, pt.clientY, kind);
   };
 
   // Zoom INSIDE the PDF / Image / Word Doc content (50% to 300%) cleanly via shared geometry helper
@@ -403,16 +560,23 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
         const isSelected = selectedId === item.id;
         const zoom = item.contentZoom || 1;
         const isPanningThis = activePanId === item.id;
+        const isNote = item.kind === "note";
+        const isEditingThisNote = isNote && editingNoteId === item.id;
         const KindIcon =
           item.kind === "pdf"
             ? FileText
             : item.kind === "doc"
             ? FileType2
+            : isNote
+            ? StickyNote
             : ImageIcon;
 
         return (
           <div
             key={item.id}
+            ref={(el) => {
+              cardRefs.current[item.id] = el;
+            }}
             data-media-card-id={item.id}
             onDragStart={(e) => e.preventDefault()}
             style={{
@@ -420,18 +584,37 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
               top: item.y,
               width: item.width,
               height: item.height,
+              ...(isNote
+                ? {
+                    backgroundColor: item.bgColor || "#fef08a",
+                    borderColor: isSelected && isInteractive ? undefined : item.borderColor || "#eab308",
+                  }
+                : {}),
             }}
             onMouseDown={(e) => {
-              if (!isInteractive || e.button !== 0) return;
+              if (!isInteractive || e.button !== 0 || isEditingThisNote) return;
               e.stopPropagation();
               e.preventDefault();
               beginDrag(item, e.clientX, e.clientY);
             }}
+            onTouchStart={(e) => {
+              if (!isInteractive || e.touches.length !== 1 || isEditingThisNote) return;
+              e.stopPropagation();
+              beginDrag(item, e.touches[0].clientX, e.touches[0].clientY);
+            }}
+            onDoubleClick={(e) => {
+              if (!isInteractive || !isNote) return;
+              e.stopPropagation();
+              setEditingNoteId(item.id);
+              setEditingNoteText(item.plainText ?? item.text ?? "");
+            }}
             className={`absolute group rounded-xl select-none transition-shadow ${
-              isInteractive ? "pointer-events-auto" : "pointer-events-none"
+              isInteractive ? "pointer-events-auto touch-none" : "pointer-events-none"
             } ${
               isInteractive
-                ? isPanningThis
+                ? isEditingThisNote
+                  ? "cursor-text"
+                  : isPanningThis
                   ? "cursor-grabbing"
                   : item.kind === "doc"
                   ? "cursor-default"
@@ -440,6 +623,8 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
             } ${
               isSelected && isInteractive
                 ? "ring-2 ring-indigo-500 shadow-2xl"
+                : isNote
+                ? "border-[1.5px] shadow-md"
                 : "border border-slate-200/90 shadow-lg"
             }`}
           >
@@ -447,20 +632,74 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
             {isInteractive && (
               <div
                 onMouseDown={(e) => startHandleDrag(e, item, "move")}
-                className="pointer-events-auto absolute -top-11 left-1/2 -translate-x-1/2 z-40 min-w-full w-max max-w-[92vw] flex items-center justify-between gap-2 rounded-xl bg-slate-900/90 px-2.5 py-1 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md cursor-grab active:cursor-grabbing"
+                onTouchStart={(e) => startHandleDrag(e, item, "move")}
+                className="pointer-events-auto touch-none absolute -top-11 left-1/2 -translate-x-1/2 z-40 min-w-full w-max max-w-[92vw] flex items-center justify-between gap-2 rounded-xl bg-slate-900/90 px-2.5 py-1 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md cursor-grab active:cursor-grabbing"
               >
                 <div className="flex items-center gap-1.5 min-w-0">
                   <GripHorizontal className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                   <KindIcon className="h-3.5 w-3.5 text-indigo-300 shrink-0" />
                   <span className="truncate max-w-[130px]" title={item.title}>
-                    {item.title}
+                    {isNote ? "Note" : item.title}
                   </span>
                 </div>
 
                 <div
                   className="flex items-center gap-1 shrink-0"
                   onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
                 >
+                  {isNote && (
+                    <div className="flex items-center gap-1 pr-1.5 border-r border-slate-700">
+                      {NOTE_THEMES.map((theme) => (
+                        <button
+                          key={theme.name}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUpdateItem(
+                              item.id,
+                              {
+                                bgColor: theme.bgColor,
+                                headerColor: theme.headerColor,
+                                borderColor: theme.borderColor,
+                                textColor: theme.textColor,
+                              },
+                              true
+                            );
+                          }}
+                          style={{ backgroundColor: theme.bgColor, borderColor: theme.borderColor }}
+                          className={`h-3.5 w-3.5 rounded-full border transition hover:scale-125 cursor-pointer ${
+                            (item.bgColor || "#fef08a") === theme.bgColor
+                              ? "ring-2 ring-white scale-110"
+                              : ""
+                          }`}
+                          title={`${theme.name} Note`}
+                        />
+                      ))}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isEditingThisNote) {
+                            commitNoteEdit(item);
+                          } else {
+                            setEditingNoteId(item.id);
+                            setEditingNoteText(item.plainText ?? item.text ?? "");
+                          }
+                        }}
+                        className="ml-0.5 p-1 rounded hover:bg-slate-700 cursor-pointer transition"
+                        title={isEditingThisNote ? "Save note text" : "Edit note text"}
+                      >
+                        {isEditingThisNote ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        ) : (
+                          <Pencil className="h-3 w-3" />
+                        )}
+                      </button>
+                    </div>
+                  )}
+
                   {item.kind === "pdf" && item.totalPages > 1 && (
                     <div className="flex items-center gap-0.5 pr-1 border-r border-slate-700">
                       <button
@@ -522,28 +761,49 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
               </div>
             )}
 
-            {/* Item Body: Acrobat-Style Clip Viewport for PDF/Image (Zero scrollbar gutter, zero white margin) */}
-            {(item.kind === "image" || item.kind === "pdf") && (
-              <div
-                ref={(el) => {
-                  scrollRefs.current[item.id] = el;
-                }}
-                className="h-full w-full rounded-xl overflow-hidden select-none"
-              >
-                <img
-                  src={item.src}
-                  alt={item.title}
-                  draggable={false}
-                  onDragStart={(e) => e.preventDefault()}
-                  style={{
-                    width: `${Math.round(Math.max(1, zoom) * 100)}%`,
-                    height: "auto",
-                    maxWidth: "none",
+            {/* Item Body: Fixed Outer Frame with Zoom/Scroll-Locked Page Annotation Canvas */}
+            {(item.kind === "image" || item.kind === "pdf") && (() => {
+              const cardRatio =
+                item.aspectRatio || item.width / Math.max(1, item.height);
+              const contentW = item.width * zoom;
+              const contentH = contentW / Math.max(0.1, cardRatio);
+              const isShrinkCentered = zoom < 1 && contentH <= item.height + 1;
+              const overlayW = OVERLAY_BASE_W;
+              const overlayH = Math.max(1, Math.round(OVERLAY_BASE_W / Math.max(0.1, cardRatio)));
+              return (
+                <div
+                  ref={(el) => {
+                    scrollRefs.current[item.id] = el;
                   }}
-                  className="block select-none pointer-events-none"
-                />
-              </div>
-            )}
+                  className={`h-full w-full rounded-xl overflow-hidden select-none ${
+                    isShrinkCentered ? "flex items-center justify-center bg-slate-100/80" : "bg-white"
+                  }`}
+                >
+                  <div
+                    style={{ width: `${Math.round(zoom * 100)}%` }}
+                    className={`relative shrink-0 ${
+                      zoom < 1 && !isShrinkCentered ? "mx-auto" : ""
+                    }`}
+                  >
+                    <img
+                      src={item.src}
+                      alt={item.title}
+                      draggable={false}
+                      onDragStart={(e) => e.preventDefault()}
+                      className="block w-full h-auto select-none pointer-events-none"
+                    />
+                    <canvas
+                      ref={(el) => {
+                        overlayRefs.current[item.id] = el;
+                      }}
+                      width={overlayW}
+                      height={overlayH}
+                      className="pointer-events-none absolute inset-0 h-full w-full"
+                    />
+                  </div>
+                </div>
+              );
+            })()}
 
             {item.kind === "doc" && (
               <div className="h-full w-full rounded-xl bg-white flex flex-col overflow-hidden">
@@ -551,8 +811,11 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
                   onMouseDown={(e) => {
                     if (isInteractive) startHandleDrag(e, item, "move");
                   }}
+                  onTouchStart={(e) => {
+                    if (isInteractive) startHandleDrag(e, item, "move");
+                  }}
                   className={`flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 shrink-0 ${
-                    isInteractive ? "cursor-grab active:cursor-grabbing" : ""
+                    isInteractive ? "cursor-grab active:cursor-grabbing touch-none" : ""
                   }`}
                 >
                   <FileType2 className="h-4 w-4 text-indigo-600 shrink-0" />
@@ -565,6 +828,9 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
                     scrollRefs.current[item.id] = el;
                   }}
                   onMouseDown={(e) => {
+                    if (isInteractive) e.stopPropagation();
+                  }}
+                  onTouchStart={(e) => {
                     if (isInteractive) e.stopPropagation();
                   }}
                   onScroll={(e) => {
@@ -580,14 +846,69 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
               </div>
             )}
 
+            {item.kind === "note" && (
+              <div
+                className="h-full w-full rounded-xl flex flex-col overflow-hidden"
+                style={{ backgroundColor: item.bgColor || "#fef08a" }}
+              >
+                <div
+                  onMouseDown={(e) => {
+                    if (isInteractive) startHandleDrag(e, item, "move");
+                  }}
+                  onTouchStart={(e) => {
+                    if (isInteractive) startHandleDrag(e, item, "move");
+                  }}
+                  style={{ backgroundColor: item.headerColor || "#fde047" }}
+                  className={`h-4 w-full shrink-0 ${
+                    isInteractive ? "cursor-grab active:cursor-grabbing touch-none" : ""
+                  }`}
+                />
+                {isEditingThisNote ? (
+                  <textarea
+                    autoFocus
+                    value={editingNoteText}
+                    onChange={(e) => setEditingNoteText(e.target.value)}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onBlur={() => commitNoteEdit(item)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        commitNoteEdit(item);
+                      } else if (e.key === "Escape") {
+                        setEditingNoteId(null);
+                      }
+                    }}
+                    style={{
+                      fontSize: `${Math.round(13 * zoom)}px`,
+                      color: item.textColor || "#422006",
+                    }}
+                    className="flex-1 w-full bg-transparent px-3.5 py-2 font-medium leading-snug outline-none resize-none select-text"
+                  />
+                ) : (
+                  <div
+                    style={{
+                      fontSize: `${Math.round(13 * zoom)}px`,
+                      color: item.textColor || "#422006",
+                    }}
+                    className="flex-1 overflow-y-auto px-3.5 py-2.5 font-medium leading-snug whitespace-pre-wrap break-words font-sans"
+                  >
+                    {item.plainText ?? item.text}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Edge Middle Dash Resize Handles (Left, Right, Top, Bottom) */}
             {isInteractive &&
               EDGE_HANDLES.map((h) => (
                 <div
                   key={h.dir}
                   onMouseDown={(e) => startHandleDrag(e, item, `resize-${h.dir}`)}
+                  onTouchStart={(e) => startHandleDrag(e, item, `resize-${h.dir}`)}
                   title={h.title}
-                  className={`pointer-events-auto absolute z-20 flex items-center justify-center group/edge ${h.wrapClass}`}
+                  className={`pointer-events-auto touch-none absolute z-20 flex items-center justify-center group/edge ${h.wrapClass}`}
                 >
                   <div
                     className={`${h.pillClass} rounded-full bg-indigo-500/85 group-hover/edge:bg-indigo-600 group-hover/edge:scale-110 transition-all shadow-sm`}
@@ -601,8 +922,9 @@ const BoardMediaLayer = forwardRef(function BoardMediaLayer(
                 <div
                   key={c.dir}
                   onMouseDown={(e) => startHandleDrag(e, item, `resize-${c.dir}`)}
+                  onTouchStart={(e) => startHandleDrag(e, item, `resize-${c.dir}`)}
                   title={c.title}
-                  className={`pointer-events-auto absolute z-30 h-4 w-4 rounded-full bg-indigo-600 border-2 border-white shadow-md hover:scale-125 transition-transform ${c.posClass}`}
+                  className={`pointer-events-auto touch-none absolute z-30 h-4 w-4 rounded-full bg-indigo-600 border-2 border-white shadow-md hover:scale-125 transition-transform ${c.posClass}`}
                 />
               ))}
           </div>

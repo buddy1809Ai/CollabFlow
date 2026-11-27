@@ -59,15 +59,16 @@ function broadcastRoomUserCount(roomId) {
   io.to(roomId).emit("user-count", count);
 }
 
-// 6. PHASE 10 & 11: Shared Gemini Vision & Diagram Generation Helper
+// 6. PHASE 10 & 11: Shared Gemini Vision & Fast Diagram Generation Helper
 const GEMINI_MODELS = [
-  "gemini-flash-lite-latest",
-  "gemini-3.5-flash-lite",
-  "gemini-3.6-flash",
-  "gemini-flash-latest",
-  "gemini-3.7-flash",
-  "gemini-3.8-flash",
+  { name: "gemini-flash-lite-latest", disableThinking: false },
+  { name: "gemini-3-flash-preview", disableThinking: true },
+  { name: "gemini-flash-latest", disableThinking: false },
+  { name: "gemini-3.1-flash-lite", disableThinking: true },
 ];
+
+// Cache fastest working model in-memory so subsequent AI calls skip failing hops
+let cachedWorkingModel = null;
 
 function getGeminiApiKey() {
   if (fs.existsSync(ENV_PATH)) {
@@ -88,44 +89,62 @@ async function callGeminiWithFallback(contents, generationConfig) {
     };
   }
 
-  const payload = { contents };
-  if (generationConfig) {
-    payload.generationConfig = generationConfig;
-  }
-  const requestBody = JSON.stringify(payload);
+  // Try last known working model first, then fall through remaining models
+  const orderedModels = cachedWorkingModel
+    ? [
+        cachedWorkingModel,
+        ...GEMINI_MODELS.filter((m) => m.name !== cachedWorkingModel.name),
+      ]
+    : GEMINI_MODELS;
 
   let lastStatus = 500;
   let lastErrorMsg = "Failed to get a response from Gemini API.";
 
-  for (const model of GEMINI_MODELS) {
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  for (const modelSpec of orderedModels) {
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelSpec.name}:generateContent?key=${apiKey}`;
 
-    const response = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: requestBody,
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return { ok: true, text, modelUsed: model };
+    const mergedConfig = { ...(generationConfig || {}) };
+    if (modelSpec.disableThinking) {
+      mergedConfig.thinkingConfig = { thinkingBudget: 0 };
+    } else {
+      delete mergedConfig.thinkingConfig;
     }
 
-    lastStatus = response.status;
-    const errorBody = await response.json().catch(() => ({}));
-    lastErrorMsg =
-      errorBody.error?.message ||
-      `Gemini API returned HTTP status ${response.status} (${response.statusText})`;
-
-    if (![404, 429, 500, 503].includes(response.status)) {
-      break;
+    const payload = { contents };
+    if (Object.keys(mergedConfig).length > 0) {
+      payload.generationConfig = mergedConfig;
     }
 
-    // Brief jitter delay before falling back to next Gemini model
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      const response = await fetch(geminiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8500),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        cachedWorkingModel = modelSpec;
+        return { ok: true, text, modelUsed: modelSpec.name };
+      }
+
+      lastStatus = response.status;
+      const errorBody = await response.json().catch(() => ({}));
+      lastErrorMsg =
+        errorBody.error?.message ||
+        `Gemini API returned HTTP status ${response.status} (${response.statusText})`;
+
+      if (![400, 404, 429, 500, 503].includes(response.status)) {
+        break;
+      }
+    } catch (err) {
+      lastErrorMsg = err.message || "Gemini request timed out.";
+    }
   }
 
+  cachedWorkingModel = null;
   return { ok: false, status: lastStatus, error: lastErrorMsg };
 }
 
@@ -151,14 +170,18 @@ app.post("/api/explain-board", async (req, res) => {
 
 Keep the explanation concise and use bullet points.`;
 
-    const result = await callGeminiWithFallback([
-      {
-        parts: [
-          { text: promptText },
-          { inline_data: { mime_type: mimeType, data: base64Data } },
-        ],
-      },
-    ]);
+    const t0 = Date.now();
+    const result = await callGeminiWithFallback(
+      [
+        {
+          parts: [
+            { text: promptText },
+            { inline_data: { mime_type: mimeType, data: base64Data } },
+          ],
+        },
+      ],
+      { temperature: 0.3, maxOutputTokens: 500 }
+    );
 
     if (!result.ok) {
       return res.status(result.status).json({ success: false, error: result.error });
@@ -168,6 +191,7 @@ Keep the explanation concise and use bullet points.`;
       success: true,
       explanation: result.text || "No explanation could be generated for this board.",
       modelUsed: result.modelUsed,
+      durationMs: Date.now() - t0,
     });
   } catch (err) {
     console.error("[Backend /api/explain-board Error]", err.message);
@@ -189,44 +213,26 @@ app.post("/api/generate-diagram", async (req, res) => {
       });
     }
 
-    const minX = 110;
-    const maxX = Math.max(760, Math.min(width - 110, 1300));
+    const minX = 100;
+    const maxX = Math.max(760, Math.min(width - 100, 1280));
     const minY = 120;
-    const maxY = Math.max(480, Math.min(height - 140, 760));
+    const maxY = Math.max(480, Math.min(height - 140, 720));
 
-    const diagramPrompt = `Convert this software engineering or study concept into a clean, well-spaced whiteboard flowchart JSON:
-"${prompt.trim()}"
+    // Compact prompt + strict output schema + thinking disabled -> sub-2s flowchart JSON
+    const diagramPrompt = `Convert "${prompt.trim()}" into a neat horizontal/vertical whiteboard flowchart JSON.
+Bounds: X in [${minX},${maxX}], Y in [${minY},${maxY}], boxes ~140x64px with >=45px gap, arrows touching box edges.
+Types: "rect","circle","diamond","triangle","arrow","line". Colors: "#1e293b","#2563eb","#16a34a","#9333ea","#d97706","#dc2626".
+1-3 word labels, max 13 elements.
+Schema: {"title":"Short title","elements":[{"type":"rect","startX":120,"startY":220,"endX":260,"endY":284,"color":"#2563eb","label":"Client"}]}`;
 
-Canvas safe coordinate box:
-- X coordinates must stay strictly between ${minX} and ${maxX}
-- Y coordinates must stay strictly between ${minY} and ${maxY}
-- Leave at least 50px spacing between boxes so labels do not overlap.
-- Keep box width ~140-180px and height ~60-80px.
-- Connect boxes sequentially with "arrow" elements whose startX/startY touch the source box edge and endX/endY touch the target box edge.
-
-Allowed shape types: "rect", "circle", "diamond", "triangle", "arrow", "line".
-Allowed colors: "#1e293b", "#2563eb", "#16a34a", "#9333ea", "#d97706", "#dc2626".
-
-Return STRICT JSON matching this schema:
-{
-  "title": "Short title",
-  "elements": [
-    {
-      "type": "rect",
-      "startX": 140,
-      "startY": 240,
-      "endX": 300,
-      "endY": 310,
-      "color": "#2563eb",
-      "label": "Client"
-    }
-  ]
-}
-Keep labels short (1 to 3 words) and limit total elements to at most 15.`;
-
+    const t0 = Date.now();
     const result = await callGeminiWithFallback(
       [{ parts: [{ text: diagramPrompt }] }],
-      { responseMimeType: "application/json" }
+      {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+        maxOutputTokens: 850,
+      }
     );
 
     if (!result.ok) {
@@ -259,6 +265,7 @@ Keep labels short (1 to 3 words) and limit total elements to at most 15.`;
       success: true,
       diagram: parsed,
       modelUsed: result.modelUsed,
+      durationMs: Date.now() - t0,
     });
   } catch (err) {
     console.error("[Backend /api/generate-diagram Error]", err.message);
@@ -268,6 +275,18 @@ Keep labels short (1 to 3 words) and limit total elements to at most 15.`;
     });
   }
 });
+
+// Track active presenter ("Explain Mode") per room so late joiners enter Watch Mode cleanly
+const roomExplainers = new Map(); // roomId -> { userId, username }
+
+function clearExplainerIfOwner(socketId, roomId) {
+  if (!roomId || !socketId) return;
+  const active = roomExplainers.get(roomId);
+  if (active && active.userId === socketId) {
+    roomExplainers.delete(roomId);
+    io.to(roomId).emit("explainer-updated", { explainer: null });
+  }
+}
 
 // 7. Socket.io Connection & Event Handling
 io.on("connection", (socket) => {
@@ -280,6 +299,7 @@ io.on("connection", (socket) => {
   socket.on("join-room", (roomId) => {
     // If client was previously in a different room, clean up old room presence
     if (currentRoomId && currentRoomId !== roomId) {
+      clearExplainerIfOwner(socket.id, currentRoomId);
       socket.leave(currentRoomId);
       // Notify old room to remove this client's remote cursor
       socket.to(currentRoomId).emit("cursor-leave", { userId: socket.id });
@@ -293,6 +313,40 @@ io.on("connection", (socket) => {
 
     // Broadcast updated occupant count to everyone inside this room
     broadcastRoomUserCount(roomId);
+    // Sync current Explainer Mode status immediately to newly joined user
+    socket.emit("explainer-updated", {
+      explainer: roomExplainers.get(roomId) || null,
+    });
+  });
+
+  // EVENT 2B: Ephemeral Cursor Quick Reaction Bubbles (1, 2, 3, / custom chat)
+  socket.on("cursor-reaction", (data) => {
+    const targetRoom = (data && data.roomId) || currentRoomId;
+    if (targetRoom && data?.text) {
+      socket.to(targetRoom).emit("cursor-reaction", {
+        ...data,
+        userId: socket.id,
+      });
+    }
+  });
+
+  // EVENT 2C: Toggle Explainer Mode (highlights explainer cursor & enables Watch Mode for peers)
+  socket.on("explainer-toggle", (data) => {
+    const targetRoom = (data && data.roomId) || currentRoomId;
+    if (!targetRoom) return;
+
+    const current = roomExplainers.get(targetRoom);
+    if (data?.active) {
+      const nextExplainer = {
+        userId: socket.id,
+        username: (data.username || "Presenter").slice(0, 40),
+      };
+      roomExplainers.set(targetRoom, nextExplainer);
+      io.to(targetRoom).emit("explainer-updated", { explainer: nextExplainer });
+    } else if (!current || current.userId === socket.id) {
+      roomExplainers.delete(targetRoom);
+      io.to(targetRoom).emit("explainer-updated", { explainer: null });
+    }
   });
 
   // EVENT 2: Live cursor movement (broadcast to other users in the SAME room)
@@ -389,6 +443,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[Socket Disconnected] Client ID: ${socket.id}`);
     if (currentRoomId) {
+      clearExplainerIfOwner(socket.id, currentRoomId);
       socket.to(currentRoomId).emit("cursor-leave", { userId: socket.id });
       // Clean up room occupant count
       setTimeout(() => {

@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import Canvas from "./components/Canvas";
 import Header from "./components/Header";
 import AiExplainer from "./components/AiExplainer";
+import { generatePrivateRoomId } from "./utils/roomId";
 
 // Backend Express & Socket.io server endpoint (uses VITE_SERVER_URL in production, localhost in dev)
 const SERVER_URL = (
@@ -18,14 +19,15 @@ function App() {
   const [socket, setSocket] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
 
-  // Synchronously initialize Room ID from URL query (?room=xyz) or fallback to "room-101"
+  // Initialize private Room ID from URL (?room=xyz) or auto-create a fresh isolated room per user
   const [roomId, setRoomId] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const initial = params.get("room");
-    return initial && initial.trim() ? initial.trim() : "room-101";
+    return initial && initial.trim() ? initial.trim() : generatePrivateRoomId();
   });
 
   const [userCount, setUserCount] = useState(1);
+  const [roomExplainer, setRoomExplainer] = useState(null); // { userId, username }
 
   // Canvas imperative controls registered by Canvas.jsx
   const canvasControlsRef = useRef(null);
@@ -86,6 +88,7 @@ function App() {
     newSocket.on("disconnect", (reason) => {
       console.log(`[Socket Disconnected] Reason: ${reason}`);
       setConnectionStatus("disconnected");
+      setRoomExplainer(null);
     });
 
     newSocket.on("connect_error", (error) => {
@@ -97,6 +100,10 @@ function App() {
       setUserCount(count);
     });
 
+    newSocket.on("explainer-updated", ({ explainer }) => {
+      setRoomExplainer(explainer || null);
+    });
+
     return () => {
       newSocket.disconnect();
     };
@@ -104,6 +111,7 @@ function App() {
 
   // 3. Emit join-room event whenever socket connects or roomId changes
   useEffect(() => {
+    setRoomExplainer(null);
     if (!socket || connectionStatus !== "connected") return;
     socket.emit("join-room", roomId);
   }, [socket, connectionStatus, roomId]);
@@ -133,10 +141,11 @@ function App() {
     }
   };
 
-  // 7. Run Explain Board analysis against /api/explain-board
+  // 7. Run Explain Board analysis against /api/explain-board (fast lightweight JPEG snapshot)
   const runExplainAnalysis = async () => {
     const controls = canvasControlsRef.current;
-    if (!controls || !controls.getImage) return;
+    const captureFn = controls?.getAiImage || controls?.getImage;
+    if (!captureFn) return;
 
     setIsAiOpen(true);
     setIsAiLoading(true);
@@ -145,7 +154,7 @@ function App() {
     setAiError(null);
 
     try {
-      const imageBase64 = await controls.getImage();
+      const imageBase64 = await captureFn();
 
       const response = await fetch(`${SERVER_URL}/api/explain-board`, {
         method: "POST",
@@ -208,6 +217,7 @@ function App() {
         title: data.diagram?.title || "Generated Flowchart",
         count: elements.length,
         modelUsed: data.modelUsed || "Gemini Flash",
+        durationMs: data.durationMs,
       });
     } catch (err) {
       console.error("[AI Diagram Generator Error]", err);
@@ -217,9 +227,20 @@ function App() {
     }
   };
 
+  // 9. Toggle Explainer Mode cleanly via Socket.io
+  const handleToggleExplainMode = useCallback(() => {
+    if (!socket || !socket.connected) return;
+    const isSelfExplaining = roomExplainer?.userId === socket.id;
+    socket.emit("explainer-toggle", {
+      roomId,
+      username: currentUser.username,
+      active: !isSelfExplaining,
+    });
+  }, [socket, roomExplainer, roomId, currentUser.username]);
+
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-slate-100">
-      {/* Top Header: Room Switcher, Connection Status, Replay, AI Studio, Share */}
+      {/* Top Header: Room Switcher, Connection Status, Explainer Badge, Replay, AI Studio, Share */}
       <Header
         roomId={roomId}
         onJoinRoom={handleJoinRoom}
@@ -227,6 +248,8 @@ function App() {
         connectionStatus={connectionStatus}
         isConnected={connectionStatus === "connected"}
         currentUser={currentUser}
+        roomExplainer={roomExplainer}
+        mySocketId={socket?.id || null}
         onExplainBoard={handleOpenAiStudio}
         isAiLoading={isAiLoading}
         onReplay={handleReplay}
@@ -234,12 +257,14 @@ function App() {
         canReplay={canReplay}
       />
 
-      {/* Main Canvas Component with Text, Sticky Notes, 6 Shapes, Laser, Replay & Paste */}
+      {/* Main Canvas Component with Touch, Highlighter, QR Share, Reactions & Explain Mode */}
       <Canvas
         socket={socket}
         isConnected={connectionStatus === "connected"}
         roomId={roomId}
         currentUser={currentUser}
+        roomExplainer={roomExplainer}
+        onToggleExplainMode={handleToggleExplainMode}
         onRegisterControls={handleRegisterControls}
       />
 
