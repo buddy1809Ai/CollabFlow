@@ -311,6 +311,7 @@ export default function Canvas({
   const fileInputRef = useRef(null);
   const shapesMenuRef = useRef(null);
   const shapesPopupRef = useRef(null);
+  const bottomToolbarRef = useRef(null);
   const socketRef = useRef(socket);
   socketRef.current = socket;
 
@@ -3151,9 +3152,14 @@ export default function Canvas({
       )}
 
       {/* Mobile Pinch Board Zoom Pill + Watch Mode Quick Reaction Chips (No Sidebar/Chat) */}
-      {(boardZoom > 1.02 || isWatchMode) && (
+      {(boardZoom > 1.02 || isWatchMode) && (() => {
+        const barRect = bottomToolbarRef.current?.getBoundingClientRect();
+        const dynamicBottomPx = barRect
+          ? Math.max(80, Math.round(window.innerHeight - barRect.top + 8))
+          : 120;
+        return (
         <div
-          style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+          style={{ bottom: `${dynamicBottomPx}px` }}
           className="pointer-events-none fixed left-1/2 -translate-x-1/2 z-40 flex flex-wrap items-center justify-center gap-2 max-w-[94vw]"
         >
           {boardZoom > 1.02 && (
@@ -3187,22 +3193,24 @@ export default function Canvas({
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
-      {/* Floating 6-Shape Picker (Sibling outside overflow-x-auto toolbar so never clipped on mobile) */}
+      {/* Floating 6-Shape Picker (Sibling outside toolbar so never clipped on mobile) */}
       {showShapesMenu && (() => {
         const triggerRect = shapesMenuRef.current?.getBoundingClientRect();
+        const barRect = bottomToolbarRef.current?.getBoundingClientRect();
         const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
         const leftPx = triggerRect
           ? Math.max(12, Math.min(vw - 268, Math.round(triggerRect.left + triggerRect.width / 2 - 128)))
           : Math.max(12, Math.round(vw / 2 - 128));
+        const bottomPx = barRect
+          ? Math.max(80, Math.round(window.innerHeight - barRect.top + 10))
+          : 132;
         return (
           <div
             ref={shapesPopupRef}
-            style={{
-              left: `${leftPx}px`,
-              bottom: "calc(4.75rem + env(safe-area-inset-bottom))",
-            }}
+            style={{ left: `${leftPx}px`, bottom: `${bottomPx}px` }}
             className="fixed w-64 rounded-2xl bg-white p-2.5 shadow-2xl border border-slate-200 z-50"
           >
             <div className="px-1.5 pb-1.5 mb-1.5 border-b border-slate-100 flex items-center justify-between">
@@ -3251,14 +3259,15 @@ export default function Canvas({
         );
       })()}
 
-      {/* Bottom Floating Toolbar (Fixed to visible mobile/desktop viewport + smooth touch horizontal swipe) */}
+      {/* Bottom Floating Toolbar (Compact 2-row grid on mobile so ALL buttons are visible; crisp single row on lg+) */}
       <div
-        style={{ bottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
-        className="fixed left-1/2 -translate-x-1/2 z-40 flex max-w-[96vw] flex-nowrap overflow-x-auto lg:overflow-visible touch-pan-x overscroll-x-contain justify-start sm:justify-center items-center gap-0.5 whitespace-nowrap rounded-2xl bg-white/95 px-2 py-1.5 shadow-2xl backdrop-blur-md border border-slate-200"
+        ref={bottomToolbarRef}
+        style={{ bottom: "max(0.65rem, env(safe-area-inset-bottom))" }}
+        className="fixed left-1/2 -translate-x-1/2 z-40 flex w-[96vw] lg:w-auto lg:max-w-[97vw] flex-wrap lg:flex-nowrap justify-center items-center gap-x-1 gap-y-1 lg:gap-0.5 whitespace-nowrap rounded-2xl bg-white/95 px-2 py-1.5 shadow-2xl backdrop-blur-md border border-slate-200"
       >
         
         {/* Tool Group: Move, Pen, Highlighter, Eraser, Text, Note, Shapes, Laser */}
-        <div className="flex items-center gap-0.5 pr-1 border-r border-slate-200">
+        <div className="flex items-center gap-0.5 lg:pr-1 lg:border-r border-slate-200">
           <button
             type="button"
             onClick={() => {
@@ -3377,7 +3386,7 @@ export default function Canvas({
               aria-expanded={showShapesMenu}
             >
               <ActiveShapeIcon className="h-4 w-4" />
-              <span>{isShapeActive ? activeShapeMeta.label : "Shapes"}</span>
+              <span className="hidden sm:inline">{isShapeActive ? activeShapeMeta.label : "Shapes"}</span>
               <ChevronUp
                 className={`h-3.5 w-3.5 transition-transform duration-150 ${
                   showShapesMenu ? "rotate-180" : ""
@@ -3413,16 +3422,16 @@ export default function Canvas({
 
         {/* Color Palette */}
         {!["eraser", "note", "move"].includes(tool) && (
-          <div className="flex items-center gap-1.5 px-1.5 border-r border-slate-200">
+          <div className="flex items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 lg:border-r border-slate-200">
             {colors.map((c) => (
               <button
                 key={c.value}
                 type="button"
                 onClick={() => setColor(c.value)}
                 style={{ backgroundColor: c.value }}
-                className={`h-5 w-5 rounded-full transition-transform hover:scale-110 ${
+                className={`h-4 w-4 sm:h-5 sm:w-5 rounded-full transition-transform hover:scale-110 ${
                   color === c.value
-                    ? "ring-2 ring-indigo-500 ring-offset-2 scale-110 shadow-sm"
+                    ? "ring-2 ring-indigo-500 ring-offset-1 sm:ring-offset-2 scale-110 shadow-sm"
                     : "opacity-85 hover:opacity-100"
                 }`}
                 title={c.name}
@@ -3432,26 +3441,27 @@ export default function Canvas({
         )}
 
         {/* Brush / Font Size Selector (Fine, Medium, Thick) */}
-        <div className="flex items-center gap-0.5 px-1 border-r border-slate-200">
+        <div className="flex items-center gap-0.5 px-0.5 sm:px-1 lg:border-r border-slate-200">
           {brushSizes.map((b) => (
             <button
               key={b.size}
               type="button"
               onClick={() => setLineWidth(b.size)}
-              className={`rounded-lg px-2 py-1 text-xs font-medium transition ${
+              className={`rounded-lg px-1.5 sm:px-2 py-1 text-[11px] sm:text-xs font-medium transition ${
                 lineWidth === b.size
                   ? "bg-slate-900 text-white"
                   : "text-slate-600 hover:bg-slate-100"
               }`}
               title={b.title}
             >
-              {b.label}
+              <span className="sm:hidden">{b.label[0]}</span>
+              <span className="hidden sm:inline">{b.label}</span>
             </button>
           ))}
         </div>
 
         {/* Files Upload (Images, PDF, Word .docx, Notes) & Grid Toggle */}
-        <div className="flex items-center gap-1 px-1 border-r border-slate-200">
+        <div className="flex items-center gap-0.5 sm:gap-1 px-0.5 sm:px-1 lg:border-r border-slate-200">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -3517,7 +3527,7 @@ export default function Canvas({
         </div>
 
         {/* Undo & Redo */}
-        <div className="flex items-center gap-0.5 px-1 border-r border-slate-200">
+        <div className="flex items-center gap-0.5 px-0.5 sm:px-1 lg:border-r border-slate-200">
           <button
             type="button"
             onClick={handleUndo}
@@ -3582,7 +3592,8 @@ export default function Canvas({
           ) : (
             <>
               <Camera className="h-4 w-4" />
-              <span>Save PNG</span>
+              <span className="sm:hidden">Save</span>
+              <span className="hidden sm:inline">Save PNG</span>
             </>
           )}
         </button>

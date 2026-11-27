@@ -78,9 +78,9 @@ export default function Header({
   };
 
   return (
-    <header className="absolute top-4 left-4 right-4 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <header className="absolute top-2.5 left-2.5 right-2.5 sm:top-4 sm:left-4 sm:right-4 z-30 flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 pointer-events-none">
       {/* Left: Branding & Connection Status */}
-      <div className="flex items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-lg backdrop-blur-md border border-slate-200 pointer-events-auto">
+      <div className="flex items-center gap-1.5 sm:gap-2 rounded-2xl bg-white/95 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-lg backdrop-blur-md border border-slate-200 pointer-events-auto">
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-indigo-600"></span>
           <span className="font-bold text-slate-900 tracking-tight text-sm">
@@ -122,10 +122,10 @@ export default function Header({
       </div>
 
       {/* Center/Right Controls: User Identity, Room Info, User Count, Replay, AI Studio & Share */}
-      <div className="flex flex-wrap items-center gap-1.5 max-w-full pointer-events-auto">
+      <div className="contents lg:flex lg:flex-wrap lg:items-center lg:gap-1.5 lg:pointer-events-auto">
         {/* Editable Current User Identity Badge (Visible on mobile & desktop) */}
         {currentUser && (
-          <div className="flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
+          <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700">
             {isEditingName ? (
               <form onSubmit={handleNameSubmit} className="flex items-center gap-1">
                 <input
@@ -174,7 +174,7 @@ export default function Header({
         )}
 
         {/* Active Room Badge / Switcher */}
-        <div className="flex items-center gap-2 rounded-2xl bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs">
+        <div className="pointer-events-auto flex items-center gap-2 rounded-2xl bg-white/95 px-2.5 sm:px-3 py-1.5 shadow-lg backdrop-blur-md border border-slate-200 text-xs">
           {isEditingRoom ? (
             <form onSubmit={handleRoomSubmit} className="flex items-center gap-1.5">
               <input
@@ -238,7 +238,7 @@ export default function Header({
         </div>
 
         {/* Room Occupants User Count Badge */}
-        <div className="flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700 whitespace-nowrap">
+        <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl bg-white/95 px-2.5 py-1.5 sm:py-2 shadow-lg backdrop-blur-md border border-slate-200 text-xs font-semibold text-slate-700 whitespace-nowrap">
           <Users className="h-4 w-4 text-indigo-600" />
           <span>
             {userCount} {userCount === 1 ? "user" : "users"}
@@ -264,7 +264,7 @@ export default function Header({
             type="button"
             onClick={onReplay}
             disabled={!canReplay && !isReplaying}
-            className={`flex items-center gap-1.5 rounded-2xl px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur-md transition border ${
+            className={`pointer-events-auto flex items-center gap-1.5 rounded-2xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-semibold shadow-lg backdrop-blur-md transition border ${
               isReplaying
                 ? "bg-rose-600 text-white border-rose-600 shadow-rose-500/20"
                 : canReplay
@@ -299,7 +299,7 @@ export default function Header({
             type="button"
             onClick={onExplainBoard}
             disabled={isAiLoading}
-            className="flex items-center gap-1.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 backdrop-blur-md transition hover:opacity-95 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="pointer-events-auto flex items-center gap-1.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 backdrop-blur-md transition hover:opacity-95 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
             title="Open AI Studio: Explain Board or Generate Flowchart Diagram"
           >
             <Sparkles className={`h-4 w-4 ${isAiLoading ? "animate-spin" : ""}`} />
@@ -311,7 +311,7 @@ export default function Header({
         <button
           type="button"
           onClick={handleCopyLink}
-          className={`flex items-center gap-1.5 rounded-2xl px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur-md transition border ${
+          className={`pointer-events-auto flex items-center gap-1.5 rounded-2xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-semibold shadow-lg backdrop-blur-md transition border ${
             copied
               ? "bg-emerald-600 text-white border-emerald-600 shadow-emerald-500/20"
               : "bg-white/95 text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-indigo-600"
